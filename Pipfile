@@ -6,9 +6,11 @@ name = "pypi"
 [packages]
 numpy = "*"
 pandas = "*"
+pyarrow = "*"
 matplotlib = "*"
 psycopg2 = "*"
 tensorflow = "*"
+scikit-learn = "*"
 
 [dev-packages]
 
