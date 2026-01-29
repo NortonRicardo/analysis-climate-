@@ -12,7 +12,8 @@ pipenv run python scripts/prepare_train_data/join_neighbors.py
 import pandas as pd
 from pathlib import Path
 
-BASE_DIR = Path(__file__).parent.parent
+# Raiz do projeto (scripts/prepare_train_data/join_neighbors.py → sobe 2 níveis)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_TRAIN_DIR = BASE_DIR / "data_train"
 
 # Mesmas variáveis do add_neighbors. Ajuste se precisar.
