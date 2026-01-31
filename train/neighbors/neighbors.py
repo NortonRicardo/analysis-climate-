@@ -171,12 +171,12 @@ def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         Dicionário com todas as métricas
     """
     return {
-        'n_samples': len(y_true),
         'mae': calc_mae(y_true, y_pred),
         'rmse': calc_rmse(y_true, y_pred),
         'bias': calc_bias(y_true, y_pred),
         'r': calc_correlation(y_true, y_pred),
         'r2': calc_r2(y_true, y_pred),
+        'n_samples': len(y_true),
         'mean_observed': np.mean(y_true),
         'mean_predicted': np.mean(y_pred),
         'std_observed': np.std(y_true),

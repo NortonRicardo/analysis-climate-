@@ -1,12 +1,16 @@
 """
 Módulo para avaliar regressão linear usando os 20 vizinhos mais próximos.
 
+Usa scikit-learn LinearRegression (Mínimos Quadrados Ordinários - OLS).
+
 Usa os valores dos vizinhos (n1 a n20), suas distâncias e diferenças de altitude
 como features para prever o valor observado.
 
 Usa arquivos separados de treino (_train.parquet) e teste (_test.parquet).
 
 Os resultados são salvos em CSV e podem ser acumulados para múltiplas variáveis.
+
+Referência: Pedregosa et al. (2011). Scikit-learn: Machine Learning in Python. JMLR 12.
 
 pipenv run python train/linear_regression/linear_regression.py
 """
@@ -16,44 +20,30 @@ import numpy as np
 import os
 from typing import Tuple, Optional, List
 
+from sklearn.linear_model import LinearRegression
+
 
 # =============================================================================
 # MÉTRICAS (implementação manual, sem dependências externas)
 # =============================================================================
 
 def calc_mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Mean Absolute Error (Erro Médio Absoluto)
-    
-    MAE = (1/n) * Σ|y_true - y_pred|
-    """
+    """Mean Absolute Error"""
     return np.mean(np.abs(y_true - y_pred))
 
 
 def calc_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Root Mean Squared Error (Raiz do Erro Quadrático Médio)
-    
-    RMSE = sqrt((1/n) * Σ(y_true - y_pred)²)
-    """
+    """Root Mean Squared Error"""
     return np.sqrt(np.mean((y_true - y_pred) ** 2))
 
 
 def calc_bias(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Bias (Viés/Tendência)
-    
-    Bias = (1/n) * Σ(y_pred - y_true)
-    """
+    """Bias (Viés/Tendência)"""
     return np.mean(y_pred - y_true)
 
 
 def calc_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Coeficiente de Determinação (R²)
-    
-    R² = 1 - (SS_res / SS_tot)
-    """
+    """Coeficiente de Determinação (R²)"""
     ss_res = np.sum((y_true - y_pred) ** 2)
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     
@@ -64,9 +54,7 @@ def calc_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def calc_correlation(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Coeficiente de Correlação de Pearson (r)
-    """
+    """Coeficiente de Correlação de Pearson (r)"""
     mean_true = np.mean(y_true)
     mean_pred = np.mean(y_pred)
     
@@ -82,96 +70,11 @@ def calc_correlation(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 # =============================================================================
-# REGRESSÃO LINEAR (implementação manual via OLS - Mínimos Quadrados Ordinários)
-# =============================================================================
-
-class LinearRegression:
-    """
-    Regressão Linear via Mínimos Quadrados Ordinários (OLS)
-    
-    Fórmula: β = (X'X)^(-1) X'y
-    
-    Onde:
-        X = matriz de features (com coluna de 1s para intercepto)
-        y = vetor de valores alvo
-        β = vetor de coeficientes [intercepto, coef1, coef2, ...]
-    """
-    
-    def __init__(self):
-        self.coefficients = None
-        self.intercept = None
-        self.feature_names = None
-    
-    def fit(self, X: np.ndarray, y: np.ndarray, feature_names: List[str] = None):
-        """
-        Treina o modelo de regressão linear.
-        
-        Args:
-            X: Matriz de features (n_samples, n_features)
-            y: Vetor alvo (n_samples,)
-            feature_names: Nomes das features (opcional)
-        """
-        n_samples, n_features = X.shape
-        
-        # Adiciona coluna de 1s para o intercepto
-        X_with_intercept = np.column_stack([np.ones(n_samples), X])
-        
-        # Calcula os coeficientes via OLS: β = (X'X)^(-1) X'y
-        # Usando pseudo-inversa para maior estabilidade numérica
-        XtX = X_with_intercept.T @ X_with_intercept
-        Xty = X_with_intercept.T @ y
-        
-        try:
-            # Tenta inversa direta primeiro
-            beta = np.linalg.solve(XtX, Xty)
-        except np.linalg.LinAlgError:
-            # Se falhar, usa pseudo-inversa
-            beta = np.linalg.pinv(XtX) @ Xty
-        
-        self.intercept = beta[0]
-        self.coefficients = beta[1:]
-        self.feature_names = feature_names
-        
-        return self
-    
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """
-        Faz predições usando o modelo treinado.
-        
-        Args:
-            X: Matriz de features (n_samples, n_features)
-            
-        Returns:
-            Vetor de predições (n_samples,)
-        """
-        if self.coefficients is None:
-            raise ValueError("Modelo não treinado. Execute fit() primeiro.")
-        
-        return self.intercept + X @ self.coefficients
-    
-    def get_coefficients_df(self) -> pd.DataFrame:
-        """
-        Retorna DataFrame com os coeficientes e seus nomes.
-        """
-        if self.coefficients is None:
-            return None
-        
-        names = self.feature_names if self.feature_names else [f'x{i}' for i in range(len(self.coefficients))]
-        
-        return pd.DataFrame({
-            'feature': ['intercept'] + list(names),
-            'coefficient': [self.intercept] + list(self.coefficients)
-        })
-
-
-# =============================================================================
 # FUNÇÕES AUXILIARES
 # =============================================================================
 
 def detect_variable_name(df: pd.DataFrame) -> str:
-    """
-    Detecta automaticamente o nome da variável no DataFrame.
-    """
+    """Detecta automaticamente o nome da variável no DataFrame."""
     exclude_patterns = ['code', 'time']
     
     for col in df.columns:
@@ -197,6 +100,8 @@ def prepare_features(
     """
     Prepara as features para regressão linear.
     
+    Dados já estão normalizados entre 0 e 1, sem NaN.
+    
     Features:
         - n1_{var} até n{n_neighbors}_{var}: valores dos vizinhos
         - n1_dist_km até n{n_neighbors}_dist_km: distâncias
@@ -207,7 +112,6 @@ def prepare_features(
     """
     feature_cols = []
     
-    # Colunas dos valores dos vizinhos
     for i in range(1, n_neighbors + 1):
         col_value = f'n{i}_{var_name}'
         col_dist = f'n{i}_dist_km'
@@ -220,37 +124,39 @@ def prepare_features(
         if col_alt in df.columns:
             feature_cols.append(col_alt)
     
-    # Target (valor observado)
     target_col = var_name
     
-    # Seleciona colunas necessárias
-    all_cols = [target_col] + feature_cols
-    data = df[all_cols].copy()
-    
-    # Remove linhas com NaN
-    data_valid = data.dropna()
-    
-    y = data_valid[target_col].values
-    X = data_valid[feature_cols].values
+    y = df[target_col].values
+    X = df[feature_cols].values
     
     return X, y, feature_cols
 
 
+def get_coefficients_df(model: LinearRegression, feature_names: List[str]) -> pd.DataFrame:
+    """
+    Extrai coeficientes do modelo sklearn.
+    
+    Args:
+        model: Modelo LinearRegression treinado
+        feature_names: Nomes das features
+    
+    Returns:
+        DataFrame com coeficientes
+    """
+    return pd.DataFrame({
+        'feature': ['intercept'] + list(feature_names),
+        'coefficient': [model.intercept_] + list(model.coef_)
+    })
+
+
 def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    """
-    Calcula todas as métricas de avaliação.
-    """
+    """Calcula todas as métricas de avaliação."""
     return {
-        'n_samples': len(y_true),
         'mae': calc_mae(y_true, y_pred),
         'rmse': calc_rmse(y_true, y_pred),
         'bias': calc_bias(y_true, y_pred),
         'r': calc_correlation(y_true, y_pred),
         'r2': calc_r2(y_true, y_pred),
-        'mean_observed': np.mean(y_true),
-        'mean_predicted': np.mean(y_pred),
-        'std_observed': np.std(y_true),
-        'std_predicted': np.std(y_pred),
     }
 
 
@@ -266,7 +172,7 @@ def evaluate_linear_regression(
     save_coefficients: bool = True
 ) -> pd.DataFrame:
     """
-    Avalia regressão linear usando os vizinhos mais próximos.
+    Avalia regressão linear usando os vizinhos mais próximos (sklearn OLS).
     
     Usa arquivos separados de treino e teste:
         - {base_path}_train.parquet
@@ -274,11 +180,10 @@ def evaluate_linear_regression(
     
     Args:
         base_path: Caminho base (ex: 'data_train/temperature/temperature')
-                   Vai carregar {base_path}_train.parquet e {base_path}_test.parquet
         output_dir: Diretório de saída
         variable_name: Nome da variável (auto-detectado se None)
         n_neighbors: Número de vizinhos a usar (default: 20)
-        save_coefficients: Se deve salvar os coeficientes em arquivo separado
+        save_coefficients: Se deve salvar os coeficientes
     
     Returns:
         DataFrame com os resultados das métricas
@@ -303,17 +208,18 @@ def evaluate_linear_regression(
     
     # Prepara features de treino
     X_train, y_train, feature_names = prepare_features(df_train, variable_name, n_neighbors)
-    print(f"  → {len(y_train):,} amostras válidas de treino")
+    print(f"  → {len(y_train):,} amostras de treino")
     print(f"  → {len(feature_names)} features: {n_neighbors} vizinhos × 3 (valor, dist, alt)")
     
     # Prepara features de teste
     X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
-    print(f"  → {len(y_test):,} amostras válidas de teste")
+    print(f"  → {len(y_test):,} amostras de teste")
     
-    # Treina modelo
-    print("\nTreinando regressão linear...")
+    # Treina modelo (OLS - Mínimos Quadrados Ordinários)
+    print("\nTreinando regressão linear (sklearn OLS)...")
     model = LinearRegression()
-    model.fit(X_train, y_train, feature_names)
+    model.fit(X_train, y_train)
+    print("  → Modelo treinado!")
     
     # Faz predições no conjunto de teste
     y_pred = model.predict(X_test)
@@ -331,8 +237,7 @@ def evaluate_linear_regression(
     
     # Reordena colunas
     cols = ['variable', 'n_neighbors', 'n_features', 'train_size', 'test_size',
-            'n_samples', 'mae', 'rmse', 'bias', 'r', 'r2',
-            'mean_observed', 'mean_predicted', 'std_observed', 'std_predicted']
+            'mae', 'rmse', 'bias', 'r', 'r2']
     result_df = result_df[cols]
     
     # Cria diretório de saída
@@ -351,20 +256,15 @@ def evaluate_linear_regression(
     
     # Salva coeficientes
     if save_coefficients:
-        coef_df = model.get_coefficients_df()
+        coef_df = get_coefficients_df(model, feature_names)
         coef_file = os.path.join(output_dir, f'coefficients_{variable_name}.csv')
         coef_df.to_csv(coef_file, index=False)
         print(f"✓ Coeficientes salvos em: {coef_file}")
     
     # Mostra resultados
     print(f"\n{'='*60}")
-    print(f"REGRESSÃO LINEAR PARA: {variable_name}")
+    print(f"REGRESSÃO LINEAR (OLS) PARA: {variable_name}")
     print(f"{'='*60}")
-    print(f"  Vizinhos usados:   {n_neighbors}")
-    print(f"  Features:          {len(feature_names)}")
-    print(f"  Amostras treino:   {len(y_train):,}")
-    print(f"  Amostras teste:    {len(y_test):,}")
-    print(f"  ---")
     print(f"  MAE:               {metrics['mae']:.4f}")
     print(f"  RMSE:              {metrics['rmse']:.4f}")
     print(f"  Bias:              {metrics['bias']:.4f}")
@@ -373,7 +273,7 @@ def evaluate_linear_regression(
     print(f"{'='*60}")
     
     # Mostra top 10 coeficientes mais importantes (por valor absoluto)
-    coef_df = model.get_coefficients_df()
+    coef_df = get_coefficients_df(model, feature_names)
     coef_df['abs_coef'] = np.abs(coef_df['coefficient'])
     top_coefs = coef_df.nlargest(10, 'abs_coef')[['feature', 'coefficient']]
     
