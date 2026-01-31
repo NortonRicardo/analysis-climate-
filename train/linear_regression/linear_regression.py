@@ -4,6 +4,8 @@ Módulo para avaliar regressão linear usando os 20 vizinhos mais próximos.
 Usa os valores dos vizinhos (n1 a n20), suas distâncias e diferenças de altitude
 como features para prever o valor observado.
 
+Usa arquivos separados de treino (_train.parquet) e teste (_test.parquet).
+
 Os resultados são salvos em CSV e podem ser acumulados para múltiplas variáveis.
 
 pipenv run python train/linear_regression/linear_regression.py
@@ -257,57 +259,56 @@ def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 # =============================================================================
 
 def evaluate_linear_regression(
-    input_path: str,
+    base_path: str,
     output_dir: str = 'train/linear_regression/results',
     variable_name: Optional[str] = None,
     n_neighbors: int = 20,
-    test_size: float = 0.2,
-    random_seed: int = 42,
     save_coefficients: bool = True
 ) -> pd.DataFrame:
     """
     Avalia regressão linear usando os vizinhos mais próximos.
     
+    Usa arquivos separados de treino e teste:
+        - {base_path}_train.parquet
+        - {base_path}_test.parquet
+    
     Args:
-        input_path: Caminho para o arquivo parquet
+        base_path: Caminho base (ex: 'data_train/temperature/temperature')
+                   Vai carregar {base_path}_train.parquet e {base_path}_test.parquet
         output_dir: Diretório de saída
         variable_name: Nome da variável (auto-detectado se None)
         n_neighbors: Número de vizinhos a usar (default: 20)
-        test_size: Fração dos dados para teste (default: 0.2)
-        random_seed: Seed para reprodutibilidade
         save_coefficients: Se deve salvar os coeficientes em arquivo separado
     
     Returns:
         DataFrame com os resultados das métricas
     """
-    # Lê o arquivo parquet
-    print(f"Lendo arquivo: {input_path}")
-    df = pd.read_parquet(input_path)
-    print(f"  → {len(df):,} registros carregados")
+    # Define paths dos arquivos
+    train_path = f"{base_path}_train.parquet"
+    test_path = f"{base_path}_test.parquet"
+    
+    # Lê arquivos de treino e teste
+    print(f"Lendo arquivo de treino: {train_path}")
+    df_train = pd.read_parquet(train_path)
+    print(f"  → {len(df_train):,} registros de treino")
+    
+    print(f"Lendo arquivo de teste: {test_path}")
+    df_test = pd.read_parquet(test_path)
+    print(f"  → {len(df_test):,} registros de teste")
     
     # Detecta ou usa o nome da variável
     if variable_name is None:
-        variable_name = detect_variable_name(df)
+        variable_name = detect_variable_name(df_train)
     print(f"  → Variável detectada: {variable_name}")
     
-    # Prepara features
-    X, y, feature_names = prepare_features(df, variable_name, n_neighbors)
-    print(f"  → {len(y):,} amostras válidas")
+    # Prepara features de treino
+    X_train, y_train, feature_names = prepare_features(df_train, variable_name, n_neighbors)
+    print(f"  → {len(y_train):,} amostras válidas de treino")
     print(f"  → {len(feature_names)} features: {n_neighbors} vizinhos × 3 (valor, dist, alt)")
     
-    # Divide em treino e teste (implementação manual)
-    np.random.seed(random_seed)
-    n_samples = len(y)
-    indices = np.random.permutation(n_samples)
-    n_test = int(n_samples * test_size)
-    
-    test_indices = indices[:n_test]
-    train_indices = indices[n_test:]
-    
-    X_train, X_test = X[train_indices], X[test_indices]
-    y_train, y_test = y[train_indices], y[test_indices]
-    
-    print(f"  → Treino: {len(y_train):,} | Teste: {len(y_test):,}")
+    # Prepara features de teste
+    X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
+    print(f"  → {len(y_test):,} amostras válidas de teste")
     
     # Treina modelo
     print("\nTreinando regressão linear...")
@@ -387,15 +388,16 @@ def evaluate_linear_regression(
 # EXECUÇÃO
 # =============================================================================
 
-# input_path='data_train/temperature/temperature_with_neighbors.parquet',
-# input_path='data_train/humidity/humidity_with_neighbors.parquet',
-# input_path='data_train/radiation/radiation_with_neighbors.parquet',
-# input_path='data_train/pressure/pressure_with_neighbors.parquet',
-# input_path='data_train/rainfall/rainfall_with_neighbors.parquet',
+# base_path='data_train/temperature/temperature'
+# base_path='data_train/humidity/humidity'
+# base_path='data_train/radiation/radiation'
+
+# base_path='data_train/pressure/pressure'
+# base_path='data_train/rainfall/rainfall'
 
 if __name__ == '__main__':
     evaluate_linear_regression(
-        input_path='data_train/temperature/temperature_with_neighbors.parquet',
+        base_path='data_train/radiation/radiation',
         output_dir='train/linear_regression/results',
         n_neighbors=20
     )
