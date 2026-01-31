@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_TRAIN_DIR = BASE_DIR / "data_train"
 
 # Mesmas variáveis do add_neighbors. Ajuste se precisar.
-VARIABLES = ["temperature"]  # , "humidity", "rainfall", "radiation", "pressure"]
+VARIABLES = ["radiation"]
 
 # Proporção para treino (resto = test). Split é temporal (primeiros TRAIN_RATIO para train).
 TRAIN_RATIO = 0.6
@@ -40,11 +40,15 @@ def main():
             continue
 
         print(f"\n🔍 {var}: {len(files)} arquivos em {anos_dir}")
-        dfs = []
-        for f in files:
+        out = None
+        for i, f in enumerate(files, 1):
+            print(f"   [{i}/{len(files)}] Carregando {f.name}...", flush=True)
             df = pd.read_parquet(f)
-            dfs.append(df)
-        out = pd.concat(dfs, ignore_index=True)
+            if out is None:
+                out = df
+            else:
+                out = pd.concat([out, df], ignore_index=True)
+            del df  # libera o arquivo lido; só o acumulado (out) fica na memória
         out = out.sort_values(["time", "code"]).reset_index(drop=True)
 
         n_antes = len(out)

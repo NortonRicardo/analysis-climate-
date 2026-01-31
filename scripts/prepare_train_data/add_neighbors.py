@@ -10,16 +10,17 @@ pipenv run python scripts/prepare_train_data/add_neighbors.py
 import pandas as pd
 from pathlib import Path
 
-BASE_DIR = Path(__file__).parent.parent
+# Raiz do projeto (scripts/prepare_train_data/add_neighbors.py → sobe 3 níveis)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_TRAIN_DIR = BASE_DIR / "data_train"
 DISTANCES_PATH = DATA_DIR / "station_distances.parquet"
 K = 20
 
-VARIABLES = ["temperature"]  # , "humidity", "rainfall", "radiation", "pressure"
+VARIABLES = ["radiation"]  # ,temperature, "humidity", "radiation", "pressure", "rainfall"
 
 # Anos a processar. Vazio = todos. Ex: [2000, 2001] = só 2000 e 2001.
-YEARS_TO_PROCESS = [2019]
+YEARS_TO_PROCESS = []
 
 
 def main():
