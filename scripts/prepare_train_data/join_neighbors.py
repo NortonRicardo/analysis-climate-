@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_TRAIN_DIR = BASE_DIR / "data_train"
 
 # Mesmas variáveis do add_neighbors. Ajuste se precisar.
-VARIABLES = ["radiation"]
+VARIABLES = ["pressure"]
 
 # Proporção para treino (resto = test). Split é temporal (primeiros TRAIN_RATIO para train).
 TRAIN_RATIO = 0.6

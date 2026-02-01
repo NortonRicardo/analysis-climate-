@@ -279,12 +279,12 @@ def evaluate_neighbors(
 # base_path='data_train/temperature/temperature'
 # base_path='data_train/humidity/humidity'
 # base_path='data_train/radiation/radiation'
-
 # base_path='data_train/pressure/pressure'
+
 # base_path='data_train/rainfall/rainfall'
 
 if __name__ == '__main__':
     evaluate_neighbors(
-        base_path='data_train/radiation/radiation',
+        base_path='data_train/pressure/pressure',
         output_dir='train/neighbors/results'
     )

@@ -17,7 +17,7 @@ DATA_TRAIN_DIR = BASE_DIR / "data_train"
 DISTANCES_PATH = DATA_DIR / "station_distances.parquet"
 K = 20
 
-VARIABLES = ["radiation"]  # ,temperature, "humidity", "radiation", "pressure", "rainfall"
+VARIABLES = ["pressure"]  # ,temperature, "humidity", "radiation", "pressure", "rainfall"
 
 # Anos a processar. Vazio = todos. Ex: [2000, 2001] = só 2000 e 2001.
 YEARS_TO_PROCESS = []
