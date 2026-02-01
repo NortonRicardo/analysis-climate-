@@ -1,9 +1,8 @@
 """
 Módulo para avaliar rede neural densa usando os 20 vizinhos mais próximos.
 
-Cria features com estrutura:
-    - Pondera valores dos vizinhos pelo inverso da distância (vizinhos próximos pesam mais)
-    - Cria interações entre valor, distância e altitude
+Usa os valores dos vizinhos (n1 a n20), suas distâncias e diferenças de altitude
+como features para prever o valor observado.
 
 Usa arquivos separados de treino (_train.parquet) e teste (_test.parquet).
 
@@ -19,7 +18,7 @@ from typing import Tuple, Optional, List
 
 # TensorFlow imports
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense, Dropout, Input, BatchNormalization
+from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 
@@ -110,96 +109,38 @@ def prepare_features(
     n_neighbors: int = 20
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
-    Prepara as features para a rede neural COM ESTRUTURA.
+    Prepara as features para a rede neural.
     
-    Usa Inverse Distance Weighting (IDW) para ponderar valores dos vizinhos.
+    Dados já estão normalizados entre 0 e 1, sem NaN.
     
-    Para cada vizinho i, cria features:
-        - valor do vizinho (n{i}_{var})
-        - IDW: valor / (dist + 1e-6)  → vizinhos próximos pesam mais
-        - distância em km
-        - diferença de altitude em km
-    
-    Features agregadas:
-        - IDW total (soma ponderada / soma dos pesos)
-        - Média simples dos vizinhos
-        - Variância dos vizinhos
+    Features:
+        - n1_{var} até n{n_neighbors}_{var}: valores dos vizinhos
+        - n1_dist_km até n{n_neighbors}_dist_km: distâncias
+        - n1_altdiff_km até n{n_neighbors}_altdiff_km: diferenças de altitude
     
     Returns:
         Tuple com (X, y, feature_names)
     """
-    features = []
-    feature_names = []
-    
-    # Arrays para cálculos agregados
-    valores = []
-    pesos_idw = []
+    feature_cols = []
     
     for i in range(1, n_neighbors + 1):
         col_value = f'n{i}_{var_name}'
         col_dist = f'n{i}_dist_km'
         col_alt = f'n{i}_altdiff_km'
         
-        if col_value not in df.columns:
-            continue
-            
-        val = df[col_value].values
-        dist = df[col_dist].values if col_dist in df.columns else np.ones(len(df))
-        alt = df[col_alt].values if col_alt in df.columns else np.zeros(len(df))
-        
-        # Feature 1: Valor bruto do vizinho
-        features.append(val)
-        feature_names.append(f'n{i}_value')
-        
-        # Feature 2: IDW - valor ponderado pelo inverso da distância
-        # Quanto menor a distância, maior o peso
-        peso_idw = 1.0 / (dist + 1e-6)
-        val_idw = val / (dist + 1e-6)
-        features.append(val_idw)
-        feature_names.append(f'n{i}_idw')
-        
-        # Feature 3: Distância em km
-        features.append(dist)
-        feature_names.append(f'n{i}_dist')
-        
-        # Feature 4: Diferença de altitude em km
-        features.append(alt)
-        feature_names.append(f'n{i}_alt')
-        
-        # Guarda para agregados
-        valores.append(val)
-        pesos_idw.append(peso_idw)
+        if col_value in df.columns:
+            feature_cols.append(col_value)
+        if col_dist in df.columns:
+            feature_cols.append(col_dist)
+        if col_alt in df.columns:
+            feature_cols.append(col_alt)
     
-    # Features agregadas
-    valores = np.array(valores)  # (n_neighbors, n_samples)
-    pesos_idw = np.array(pesos_idw)
+    target_col = var_name
     
-    # IDW total: Σ(valor * peso) / Σ(peso)
-    soma_pesos = np.sum(pesos_idw, axis=0) + 1e-8
-    idw_total = np.sum(valores * pesos_idw, axis=0) / soma_pesos
-    features.append(idw_total)
-    feature_names.append('idw_total')
+    y = df[target_col].values
+    X = df[feature_cols].values
     
-    # Média simples dos vizinhos
-    media_simples = np.mean(valores, axis=0)
-    features.append(media_simples)
-    feature_names.append('simple_mean')
-    
-    # Variância dos vizinhos (indica dispersão espacial)
-    variancia = np.var(valores, axis=0)
-    features.append(variancia)
-    feature_names.append('variance')
-    
-    # Diferença entre n1 e média (o quanto o vizinho mais próximo difere)
-    diff_n1_media = valores[0] - media_simples
-    features.append(diff_n1_media)
-    feature_names.append('n1_diff_mean')
-    
-    # Stack features
-    X = np.column_stack(features)
-    y = df[var_name].values
-    
-    return X, y, feature_names
+    return X, y, feature_cols
 
 
 # =============================================================================
@@ -208,37 +149,64 @@ def prepare_features(
 
 def build_dense_model(
     input_dim: int,
+    architecture: str = 'medium',
     learning_rate: float = 0.001,
     weight_decay: float = 0.01
 ) -> Sequential:
     """
     Constrói modelo de rede neural densa.
     
-    Arquitetura fixa:
-        Input -> 128 -> 128 -> 64 -> 32 -> 16 -> 1
-    
     Usa AdamW com weight decay (regularização L2 desacoplada).
+    
+    Arquiteturas disponíveis:
+        - 'small': 32 -> 16 -> 1 (mínimo)
+        - 'medium': 64 -> 32 -> 16 -> 1 (balanceado)
+        - 'large': 128 -> 64 -> 32 -> 1 (mais capacidade)
     
     Args:
         input_dim: Número de features de entrada
+        architecture: Tipo de arquitetura ('small', 'medium', 'large')
         learning_rate: Taxa de aprendizado
         weight_decay: Regularização L2 via AdamW (default: 0.01)
     
     Returns:
         Modelo Keras compilado
     """
-    model = Sequential([
-        Input(shape=(input_dim,)),
-        BatchNormalization(),
-        Dense(128, activation='relu'),
-        Dense(128, activation='relu'),
-        Dense(64, activation='relu'),
-        Dense(32, activation='relu'),
-        Dense(16, activation='relu'),
-        Dense(1)
-    ])
+    model = Sequential()
+    model.add(Input(shape=(input_dim,)))
     
-    # Compila modelo com AdamW
+    if architecture == 'small':
+        # ~1k parâmetros
+        model.add(Dense(32, activation='relu'))
+        model.add(Dropout(0.3))
+        model.add(Dense(16, activation='relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(1))
+        
+    elif architecture == 'medium':
+        # ~4k parâmetros
+        model.add(Dense(64, activation='relu'))
+        model.add(Dropout(0.3))
+        model.add(Dense(32, activation='relu'))
+        model.add(Dropout(0.3))
+        model.add(Dense(16, activation='relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(1))
+        
+    elif architecture == 'large':
+        # ~15k parâmetros
+        model.add(Dense(128, activation='relu'))
+        model.add(Dropout(0.4))
+        model.add(Dense(64, activation='relu'))
+        model.add(Dropout(0.4))
+        model.add(Dense(32, activation='relu'))
+        model.add(Dropout(0.3))
+        model.add(Dense(1))
+    
+    else:
+        raise ValueError(f"Arquitetura desconhecida: {architecture}")
+    
+    # Compila modelo com AdamW (weight decay = regularização L2 desacoplada)
     model.compile(
         optimizer=AdamW(learning_rate=learning_rate, weight_decay=weight_decay),
         loss='mse',
@@ -258,17 +226,17 @@ def evaluate_dense(
     models_dir: str = 'train/dense/models',
     variable_name: Optional[str] = None,
     n_neighbors: int = 20,
-    learning_rate: float = 0.001,
+    architecture: str = 'medium',
+    learning_rate: float = 0.0005,
     weight_decay: float = 0.01,
     epochs: int = 100,
-    batch_size: int = 512,
+    batch_size: int = 8192,
     validation_split: float = 0.15,
     patience: int = 15
 ) -> pd.DataFrame:
     """
     Avalia rede neural densa usando os vizinhos mais próximos.
     
-    Usa features estruturadas (ponderadas por distância e altitude).
     Usa AdamW com weight decay para regularização.
     
     Usa arquivos separados de treino e teste:
@@ -281,10 +249,11 @@ def evaluate_dense(
         models_dir: Diretório para salvar modelos
         variable_name: Nome da variável (auto-detectado se None)
         n_neighbors: Número de vizinhos a usar (default: 20)
-        learning_rate: Taxa de aprendizado (default: 0.001)
+        architecture: Arquitetura da rede ('small', 'medium', 'large')
+        learning_rate: Taxa de aprendizado (default: 0.0005)
         weight_decay: Regularização L2 via AdamW (default: 0.01)
         epochs: Número máximo de épocas
-        batch_size: Tamanho do batch (default: 512)
+        batch_size: Tamanho do batch (maior = mais rápido, mas mais memória)
         validation_split: Fração do treino para validação (default: 0.15)
         patience: Épocas sem melhora antes de parar (default: 15)
     
@@ -309,11 +278,10 @@ def evaluate_dense(
         variable_name = detect_variable_name(df_train)
     print(f"  → Variável detectada: {variable_name}")
     
-    # Prepara features com estrutura IDW
-    print("\nPreparando features com IDW (Inverse Distance Weighting)...")
+    # Prepara features
     X_train, y_train, feature_names = prepare_features(df_train, variable_name, n_neighbors)
     print(f"  → {len(y_train):,} amostras de treino")
-    print(f"  → {len(feature_names)} features (valor, IDW, dist, alt por vizinho + agregadas)")
+    print(f"  → {len(feature_names)} features")
     
     X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
     print(f"  → {len(y_test):,} amostras de teste")
@@ -326,9 +294,8 @@ def evaluate_dense(
     model_path = os.path.join(models_dir, f'dense_{variable_name}.keras')
     
     # Constrói modelo
-    print(f"\nConstruindo rede neural densa...")
-    print(f"  → Arquitetura: 128 → 128 → 64 → 32 → 16 → 1")
-    model = build_dense_model(len(feature_names), learning_rate, weight_decay)
+    print(f"\nConstruindo rede neural densa ({architecture})...")
+    model = build_dense_model(len(feature_names), architecture, learning_rate, weight_decay)
     model.summary()
     
     # Callbacks
@@ -357,7 +324,7 @@ def evaluate_dense(
     # Treina modelo
     print(f"\nTreinando modelo (AdamW)...")
     print(f"  → Épocas máximas: {epochs}")
-    print(f"  → Batch size: {batch_size}")
+    print(f"  → Batch size: {batch_size:,}")
     print(f"  → Learning rate: {learning_rate}")
     print(f"  → Weight decay: {weight_decay}")
     print(f"  → Validação: {validation_split*100:.0f}% do treino")
@@ -385,7 +352,7 @@ def evaluate_dense(
     metrics = calculate_all_metrics(y_test, y_pred)
     metrics['variable'] = variable_name
     metrics['n_neighbors'] = n_neighbors
-    metrics['n_features'] = len(feature_names)
+    metrics['architecture'] = architecture
     metrics['learning_rate'] = learning_rate
     metrics['train_size'] = len(y_train)
     metrics['test_size'] = len(y_test)
@@ -396,7 +363,7 @@ def evaluate_dense(
     result_df = pd.DataFrame([metrics])
     
     # Reordena colunas
-    cols = ['variable', 'n_neighbors', 'n_features', 'train_size', 'test_size',
+    cols = ['variable', 'architecture', 'n_neighbors', 'train_size', 'test_size',
             'epochs_trained', 'mae', 'rmse', 'bias', 'r', 'r2']
     result_df = result_df[cols]
     
@@ -433,6 +400,7 @@ def evaluate_dense(
 # base_path='data_train/temperature/temperature'
 # base_path='data_train/humidity/humidity'
 # base_path='data_train/radiation/radiation'
+
 # base_path='data_train/pressure/pressure'
 # base_path='data_train/rainfall/rainfall'
 
@@ -441,10 +409,21 @@ if __name__ == '__main__':
         base_path='data_train/temperature/temperature',
         output_dir='train/dense/results',
         models_dir='train/dense/models',
-        learning_rate=0.001,
+        architecture='medium',  # 'small', 'medium', 'large'
+        learning_rate=0.0005,
         weight_decay=0.01,
         epochs=100,
-        batch_size=512,
+        batch_size=8192,
         validation_split=0.15,
         patience=15
     )
+
+# ============================================================
+# REDE NEURAL DENSA PARA: temperature
+# ============================================================
+#   MAE:               0.0555
+#   RMSE:              0.0713
+#   Bias:              -0.0323
+#   r (correlação):    0.9098
+#   R²:                0.5364
+# ============================================================
