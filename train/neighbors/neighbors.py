@@ -1,11 +1,11 @@
 """
-Módulo para avaliar a qualidade da imputação por vizinhos mais próximos.
+Módulo para avaliar a qualidade da imputação por vizinho mais próximo.
 
-Calcula métricas comparando o valor observado com o valor do vizinho mais próximo (n1).
+Compara coluna observada (n) com a do vizinho n1. Espera DF com colunas:
+  measurement_time, code, n, n1, n1_dist, n1_alt_diff, n1_idw, n2, ...
 
-Usa arquivo de teste (_test.parquet) para avaliação consistente com outros modelos.
-
-Os resultados são salvos em CSV e podem ser acumulados para múltiplas variáveis.
+Arquivos: {base_path}_test.parquet (ex: data/data_train/temperature/temperature_test.parquet).
+Métricas: mae, rmse, bias, r, r2. Resultados em CSV.
 
 pipenv run python train/neighbors/neighbors.py
 """
@@ -108,67 +108,25 @@ def calc_correlation(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # FUNÇÕES AUXILIARES
 # =============================================================================
 
-def detect_variable_name(df: pd.DataFrame) -> str:
+def get_valid_pairs(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Detecta automaticamente o nome da variável no DataFrame.
-    
-    Procura por colunas que não sejam: code, time, ou que comecem com 'n' seguido de número.
-    """
-    exclude_patterns = ['code', 'time']
-    
-    for col in df.columns:
-        # Ignora colunas de código e tempo
-        if col in exclude_patterns:
-            continue
-        
-        # Ignora colunas de vizinhos (n1_*, n2_*, etc.)
-        if col.startswith('n') and '_' in col:
-            parts = col.split('_')
-            if parts[0][1:].isdigit():
-                continue
-        
-        # Se não é vizinho e não é code/time, é a variável principal
-        if not (col.startswith('n') and col[1:].split('_')[0].isdigit()):
-            return col
-    
-    raise ValueError("Não foi possível detectar a variável principal no DataFrame")
-
-
-def get_valid_pairs(
-    df: pd.DataFrame, 
-    var_name: str
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Obtém pares válidos de valores observados e preditos (n1).
+    Obtém pares válidos: valor observado (coluna n) e valor do vizinho n1 (coluna n1).
     Remove registros onde qualquer um dos valores é NaN.
-    
-    Returns:
-        Tuple com (y_true, y_pred) como arrays numpy
+
+    Esquema do DF: measurement_time, code, n, n1, n1_dist, n1_alt_diff, n1_idw, ...
     """
-    observed_col = var_name
-    neighbor_col = f'n1_{var_name}'
-    
-    if neighbor_col not in df.columns:
-        raise ValueError(f"Coluna do vizinho '{neighbor_col}' não encontrada no DataFrame")
-    
-    # Cria DataFrame com as duas colunas
-    pairs = df[[observed_col, neighbor_col]].copy()
-    
-    # Remove NaN
+    if 'n' not in df.columns or 'n1' not in df.columns:
+        raise ValueError("DataFrame deve ter colunas 'n' (observado) e 'n1' (vizinho)")
+    pairs = df[['n', 'n1']].copy()
     pairs_valid = pairs.dropna()
-    
-    y_true = pairs_valid[observed_col].values
-    y_pred = pairs_valid[neighbor_col].values
-    
+    y_true = pairs_valid['n'].values
+    y_pred = pairs_valid['n1'].values
     return y_true, y_pred
 
 
 def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """
-    Calcula todas as métricas de avaliação.
-    
-    Returns:
-        Dicionário com todas as métricas
+    Calcula métricas de avaliação: mae, rmse, bias, r, r2.
     """
     return {
         'mae': calc_mae(y_true, y_pred),
@@ -176,11 +134,6 @@ def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         'bias': calc_bias(y_true, y_pred),
         'r': calc_correlation(y_true, y_pred),
         'r2': calc_r2(y_true, y_pred),
-        'n_samples': len(y_true),
-        'mean_observed': np.mean(y_true),
-        'mean_predicted': np.mean(y_pred),
-        'std_observed': np.std(y_true),
-        'std_predicted': np.std(y_pred),
     }
 
 
@@ -200,10 +153,10 @@ def evaluate_neighbors(
         - {base_path}_test.parquet
     
     Args:
-        base_path: Caminho base (ex: 'data_train/temperature/temperature')
+        base_path: Caminho base (ex: 'data/data_train/temperature/temperature')
                    Vai carregar {base_path}_test.parquet
         output_dir: Diretório onde salvar os resultados (CSV)
-        variable_name: Nome da variável (auto-detectado se None)
+        variable_name: Nome da variável para o CSV (extraído do base_path se None)
     
     Returns:
         DataFrame com os resultados das métricas
@@ -216,25 +169,22 @@ def evaluate_neighbors(
     df = pd.read_parquet(test_path)
     print(f"  → {len(df):,} registros carregados")
     
-    # Detecta ou usa o nome da variável
+    # Nome da variável (para o CSV): do base_path ou informado
     if variable_name is None:
-        variable_name = detect_variable_name(df)
-    print(f"  → Variável detectada: {variable_name}")
+        variable_name = os.path.basename(base_path.rstrip('/'))
+    print(f"  → Variável: {variable_name}")
     
-    # Obtém pares válidos
-    y_true, y_pred = get_valid_pairs(df, variable_name)
-    print(f"  → {len(y_true):,} pares válidos para avaliação")
+    # Obtém pares válidos (colunas n e n1)
+    y_true, y_pred = get_valid_pairs(df)
+    print(f"  → {len(y_true):,} pares para avaliação")
     
-    # Calcula métricas
+    # Calcula métricas (mae, rmse, bias, r, r2)
     metrics = calculate_all_metrics(y_true, y_pred)
     metrics['variable'] = variable_name
     
-    # Cria DataFrame de resultado
+    # DataFrame de resultado: variable + 5 métricas
     result_df = pd.DataFrame([metrics])
-    
-    # Reordena colunas (variável primeiro)
-    cols = ['variable', 'n_samples', 'mae', 'rmse', 'bias', 'r', 'r2', 
-            'mean_observed', 'mean_predicted', 'std_observed', 'std_predicted']
+    cols = ['variable', 'mae', 'rmse', 'bias', 'r', 'r2']
     result_df = result_df[cols]
     
     # Cria diretório de saída se não existir
@@ -261,7 +211,6 @@ def evaluate_neighbors(
     print(f"\n{'='*60}")
     print(f"MÉTRICAS PARA: {variable_name}")
     print(f"{'='*60}")
-    print(f"  Amostras válidas:  {metrics['n_samples']:,}")
     print(f"  MAE:               {metrics['mae']:.4f}")
     print(f"  RMSE:              {metrics['rmse']:.4f}")
     print(f"  Bias:              {metrics['bias']:.4f}")
@@ -276,15 +225,14 @@ def evaluate_neighbors(
 # EXECUÇÃO
 # =============================================================================
 
-# base_path='data_train/temperature/temperature'
-# base_path='data_train/humidity/humidity'
-# base_path='data_train/radiation/radiation'
-# base_path='data_train/pressure/pressure'
-
-# base_path='data_train/rainfall/rainfall'
+# base_path='data/data_train/temperature/temperature'
+# base_path='data/data_train/humidity/humidity'
+# base_path='data/data_train/radiation/radiation'
+# base_path='data/data_train/pressure/pressure'
+# base_path='data/data_train/rainfall/rainfall'
 
 if __name__ == '__main__':
     evaluate_neighbors(
-        base_path='data_train/pressure/pressure',
+        base_path='data/data_train/temperature/temperature',
         output_dir='train/neighbors/results'
     )
