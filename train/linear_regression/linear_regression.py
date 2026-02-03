@@ -1,16 +1,11 @@
 """
-Módulo para avaliar regressão linear usando os 20 vizinhos mais próximos.
+Regressão linear (sklearn OLS) usando os vizinhos mais próximos.
 
-Usa scikit-learn LinearRegression (Mínimos Quadrados Ordinários - OLS).
+Target: coluna n. Features: n1, n1_dist, n1_alt_diff, n1_idw, n2, ... (por vizinho).
+Esquema do DF: measurement_time, code, n, n1, n1_dist, n1_alt_diff, n1_idw, n2, ...
 
-Usa os valores dos vizinhos (n1 a n20), suas distâncias e diferenças de altitude
-como features para prever o valor observado.
-
-Usa arquivos separados de treino (_train.parquet) e teste (_test.parquet).
-
-Os resultados são salvos em CSV e podem ser acumulados para múltiplas variáveis.
-
-Referência: Pedregosa et al. (2011). Scikit-learn: Machine Learning in Python. JMLR 12.
+Arquivos: {base_path}_train.parquet e _test.parquet (ex: data/data_train/temperature/).
+Métricas: mae, rmse, bias, r, r2. Resultados em CSV.
 
 pipenv run python train/linear_regression/linear_regression.py
 """
@@ -20,6 +15,7 @@ import numpy as np
 import os
 from typing import Tuple, Optional, List
 
+import joblib
 from sklearn.linear_model import LinearRegression
 
 
@@ -73,80 +69,25 @@ def calc_correlation(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # FUNÇÕES AUXILIARES
 # =============================================================================
 
-def detect_variable_name(df: pd.DataFrame) -> str:
-    """Detecta automaticamente o nome da variável no DataFrame."""
-    exclude_patterns = ['code', 'time']
-    
-    for col in df.columns:
-        if col in exclude_patterns:
-            continue
-        
-        if col.startswith('n') and '_' in col:
-            parts = col.split('_')
-            if parts[0][1:].isdigit():
-                continue
-        
-        if not (col.startswith('n') and col[1:].split('_')[0].isdigit()):
-            return col
-    
-    raise ValueError("Não foi possível detectar a variável principal no DataFrame")
-
-
 def prepare_features(
-    df: pd.DataFrame, 
-    var_name: str,
+    df: pd.DataFrame,
     n_neighbors: int = 20
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
-    Prepara as features para regressão linear.
-    
-    Dados já estão normalizados entre 0 e 1, sem NaN.
-    
-    Features:
-        - n1_{var} até n{n_neighbors}_{var}: valores dos vizinhos
-        - n1_dist_km até n{n_neighbors}_dist_km: distâncias
-        - n1_altdiff_km até n{n_neighbors}_altdiff_km: diferenças de altitude
-    
-    Returns:
-        Tuple com (X, y, feature_names)
+    Prepara features para regressão: target = coluna n; features = n1, n1_dist,
+    n1_alt_diff, n1_idw, n2, ... por vizinho (esquema: n, n1, n1_dist, n1_alt_diff, n1_idw, ...).
     """
+    if 'n' not in df.columns:
+        raise ValueError("DataFrame deve ter coluna 'n' (target)")
     feature_cols = []
-    
     for i in range(1, n_neighbors + 1):
-        col_value = f'n{i}_{var_name}'
-        col_dist = f'n{i}_dist_km'
-        col_alt = f'n{i}_altdiff_km'
-        
-        if col_value in df.columns:
-            feature_cols.append(col_value)
-        if col_dist in df.columns:
-            feature_cols.append(col_dist)
-        if col_alt in df.columns:
-            feature_cols.append(col_alt)
-    
-    target_col = var_name
-    
-    y = df[target_col].values
+        for suffix in ('', '_dist', '_alt_diff', '_idw'):
+            col = f'n{i}{suffix}' if suffix else f'n{i}'
+            if col in df.columns:
+                feature_cols.append(col)
+    y = df['n'].values
     X = df[feature_cols].values
-    
     return X, y, feature_cols
-
-
-def get_coefficients_df(model: LinearRegression, feature_names: List[str]) -> pd.DataFrame:
-    """
-    Extrai coeficientes do modelo sklearn.
-    
-    Args:
-        model: Modelo LinearRegression treinado
-        feature_names: Nomes das features
-    
-    Returns:
-        DataFrame com coeficientes
-    """
-    return pd.DataFrame({
-        'feature': ['intercept'] + list(feature_names),
-        'coefficient': [model.intercept_] + list(model.coef_)
-    })
 
 
 def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
@@ -169,7 +110,7 @@ def evaluate_linear_regression(
     output_dir: str = 'train/linear_regression/results',
     variable_name: Optional[str] = None,
     n_neighbors: int = 20,
-    save_coefficients: bool = True
+    save_model: bool = True
 ) -> pd.DataFrame:
     """
     Avalia regressão linear usando os vizinhos mais próximos (sklearn OLS).
@@ -179,65 +120,48 @@ def evaluate_linear_regression(
         - {base_path}_test.parquet
     
     Args:
-        base_path: Caminho base (ex: 'data_train/temperature/temperature')
+        base_path: Caminho base (ex: 'data/data_train/temperature/temperature')
         output_dir: Diretório de saída
-        variable_name: Nome da variável (auto-detectado se None)
+        variable_name: Nome da variável para o CSV (extraído do base_path se None)
         n_neighbors: Número de vizinhos a usar (default: 20)
-        save_coefficients: Se deve salvar os coeficientes
+        save_model: Se deve salvar o modelo treinado (joblib)
     
     Returns:
         DataFrame com os resultados das métricas
     """
-    # Define paths dos arquivos
     train_path = f"{base_path}_train.parquet"
     test_path = f"{base_path}_test.parquet"
     
-    # Lê arquivos de treino e teste
-    print(f"Lendo arquivo de treino: {train_path}")
-    df_train = pd.read_parquet(train_path)
-    print(f"  → {len(df_train):,} registros de treino")
-    
-    print(f"Lendo arquivo de teste: {test_path}")
-    df_test = pd.read_parquet(test_path)
-    print(f"  → {len(df_test):,} registros de teste")
-    
-    # Detecta ou usa o nome da variável
     if variable_name is None:
-        variable_name = detect_variable_name(df_train)
-    print(f"  → Variável detectada: {variable_name}")
+        variable_name = os.path.basename(base_path.rstrip('/'))
+    print(f"Variável: {variable_name}")
     
-    # Prepara features de treino
-    X_train, y_train, feature_names = prepare_features(df_train, variable_name, n_neighbors)
-    print(f"  → {len(y_train):,} amostras de treino")
-    print(f"  → {len(feature_names)} features: {n_neighbors} vizinhos × 3 (valor, dist, alt)")
+    print(f"Lendo treino: {train_path}")
+    df_train = pd.read_parquet(train_path)
+    print(f"  → {len(df_train):,} registros")
     
-    # Prepara features de teste
-    X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
-    print(f"  → {len(y_test):,} amostras de teste")
+    X_train, y_train, feature_names = prepare_features(df_train, n_neighbors)
+    print(f"  → {len(y_train):,} amostras, {len(feature_names)} features")
     
-    # Treina modelo (OLS - Mínimos Quadrados Ordinários)
     print("\nTreinando regressão linear (sklearn OLS)...")
     model = LinearRegression()
     model.fit(X_train, y_train)
     print("  → Modelo treinado!")
     
-    # Faz predições no conjunto de teste
+    del df_train, X_train, y_train  # libera memória antes de carregar teste
+    
+    print(f"Lendo teste: {test_path}")
+    df_test = pd.read_parquet(test_path)
+    X_test, y_test, _ = prepare_features(df_test, n_neighbors)
+    print(f"  → {len(y_test):,} amostras de teste")
+    
     y_pred = model.predict(X_test)
     
-    # Calcula métricas
     metrics = calculate_all_metrics(y_test, y_pred)
     metrics['variable'] = variable_name
-    metrics['n_neighbors'] = n_neighbors
-    metrics['n_features'] = len(feature_names)
-    metrics['train_size'] = len(y_train)
-    metrics['test_size'] = len(y_test)
     
-    # Cria DataFrame de resultado
     result_df = pd.DataFrame([metrics])
-    
-    # Reordena colunas
-    cols = ['variable', 'n_neighbors', 'n_features', 'train_size', 'test_size',
-            'mae', 'rmse', 'bias', 'r', 'r2']
+    cols = ['variable', 'mae', 'rmse', 'bias', 'r', 'r2']
     result_df = result_df[cols]
     
     # Cria diretório de saída
@@ -254,12 +178,10 @@ def evaluate_linear_regression(
     result_df.to_csv(results_file, index=False)
     print(f"\n✓ Métricas salvas em: {results_file}")
     
-    # Salva coeficientes
-    if save_coefficients:
-        coef_df = get_coefficients_df(model, feature_names)
-        coef_file = os.path.join(output_dir, f'coefficients_{variable_name}.csv')
-        coef_df.to_csv(coef_file, index=False)
-        print(f"✓ Coeficientes salvos em: {coef_file}")
+    if save_model:
+        model_file = os.path.join(output_dir, f'model_{variable_name}.joblib')
+        joblib.dump(model, model_file)
+        print(f"✓ Modelo salvo em: {model_file}")
     
     # Mostra resultados
     print(f"\n{'='*60}")
@@ -272,15 +194,6 @@ def evaluate_linear_regression(
     print(f"  R²:                {metrics['r2']:.4f}")
     print(f"{'='*60}")
     
-    # Mostra top 10 coeficientes mais importantes (por valor absoluto)
-    coef_df = get_coefficients_df(model, feature_names)
-    coef_df['abs_coef'] = np.abs(coef_df['coefficient'])
-    top_coefs = coef_df.nlargest(10, 'abs_coef')[['feature', 'coefficient']]
-    
-    print(f"\nTop 10 coeficientes mais importantes:")
-    for _, row in top_coefs.iterrows():
-        print(f"  {row['feature']:20s} {row['coefficient']:>10.4f}")
-    
     return result_df
 
 
@@ -288,16 +201,15 @@ def evaluate_linear_regression(
 # EXECUÇÃO
 # =============================================================================
 
-# base_path='data_train/temperature/temperature'
-# base_path='data_train/humidity/humidity'
-# base_path='data_train/radiation/radiation'
-# base_path='data_train/pressure/pressure'
-
-# base_path='data_train/rainfall/rainfall'
+# base_path='data/data_train/temperature/temperature'
+# base_path='data/data_train/humidity/humidity'
+# base_path='data/data_train/radiation/radiation'
+# base_path='data/data_train/pressure/pressure'
+# base_path='data/data_train/rainfall/rainfall'
 
 if __name__ == '__main__':
     evaluate_linear_regression(
-        base_path='data_train/pressure/pressure',
+        base_path='data/data_train/temperature/temperature',
         output_dir='train/linear_regression/results',
         n_neighbors=20
     )
