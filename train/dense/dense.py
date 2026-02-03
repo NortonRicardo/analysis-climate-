@@ -15,11 +15,12 @@ pipenv run python train/dense/dense.py
 import pandas as pd
 import numpy as np
 import os
+import gc
 from typing import Tuple, Optional, List
 
 # TensorFlow imports
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense, Dropout, Input, BatchNormalization
+from tensorflow.keras.layers import Dense, Input, BatchNormalization
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 
@@ -195,9 +196,9 @@ def prepare_features(
     features.append(diff_n1_media)
     feature_names.append('n1_diff_mean')
     
-    # Stack features
-    X = np.column_stack(features)
-    y = df[var_name].values
+    # Stack features (usa float32 para economizar memória)
+    X = np.column_stack(features).astype(np.float32)
+    y = df[var_name].values.astype(np.float32)
     
     return X, y, feature_names
 
@@ -295,14 +296,10 @@ def evaluate_dense(
     train_path = f"{base_path}_train.parquet"
     test_path = f"{base_path}_test.parquet"
     
-    # Lê arquivos
+    # Lê arquivo de treino
     print(f"Lendo arquivo de treino: {train_path}")
     df_train = pd.read_parquet(train_path)
     print(f"  → {len(df_train):,} registros de treino")
-    
-    print(f"Lendo arquivo de teste: {test_path}")
-    df_test = pd.read_parquet(test_path)
-    print(f"  → {len(df_test):,} registros de teste")
     
     # Detecta variável
     if variable_name is None:
@@ -312,11 +309,13 @@ def evaluate_dense(
     # Prepara features com estrutura IDW
     print("\nPreparando features com IDW (Inverse Distance Weighting)...")
     X_train, y_train, feature_names = prepare_features(df_train, variable_name, n_neighbors)
-    print(f"  → {len(y_train):,} amostras de treino")
+    train_size = len(y_train)  # Guarda antes de deletar
+    print(f"  → {train_size:,} amostras de treino")
     print(f"  → {len(feature_names)} features (valor, IDW, dist, alt por vizinho + agregadas)")
     
-    X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
-    print(f"  → {len(y_test):,} amostras de teste")
+    # Libera memória do DataFrame de treino (já extraímos X_train e y_train)
+    del df_train
+    gc.collect()
     
     # Cria diretórios
     os.makedirs(output_dir, exist_ok=True)
@@ -377,6 +376,21 @@ def evaluate_dense(
     print(f"\nCarregando melhor modelo de: {model_path}")
     model = load_model(model_path)
     
+    # Libera memória dos dados de treino (não precisamos mais)
+    del X_train, y_train
+    gc.collect()
+    
+    # Lê arquivo de teste (apenas quando necessário)
+    print(f"\nLendo arquivo de teste: {test_path}")
+    df_test = pd.read_parquet(test_path)
+    print(f"  → {len(df_test):,} registros de teste")
+    
+    # Prepara features de teste
+    X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
+    test_size = len(y_test)  # Guarda antes de deletar df_test
+    del df_test  # Libera memória
+    gc.collect()
+    
     # Faz predições no teste
     print("Fazendo predições no conjunto de teste...")
     y_pred = model.predict(X_test, batch_size=batch_size, verbose=0).flatten()
@@ -387,8 +401,8 @@ def evaluate_dense(
     metrics['n_neighbors'] = n_neighbors
     metrics['n_features'] = len(feature_names)
     metrics['learning_rate'] = learning_rate
-    metrics['train_size'] = len(y_train)
-    metrics['test_size'] = len(y_test)
+    metrics['train_size'] = train_size
+    metrics['test_size'] = test_size
     metrics['epochs_trained'] = len(history.history['loss'])
     metrics['best_val_loss'] = min(history.history['val_loss'])
     
