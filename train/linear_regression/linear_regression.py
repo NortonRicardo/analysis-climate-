@@ -209,7 +209,7 @@ def evaluate_linear_regression(
 
 if __name__ == '__main__':
     evaluate_linear_regression(
-        base_path='data/data_train/temperature/temperature',
+        base_path='data/data_train/rainfall/rainfall',
         output_dir='train/linear_regression/results',
         n_neighbors=20
     )
