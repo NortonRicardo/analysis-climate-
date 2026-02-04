@@ -1,13 +1,11 @@
 """
-Módulo para avaliar rede neural densa usando os 20 vizinhos mais próximos.
+Rede neural densa usando os vizinhos mais próximos.
 
-Cria features com estrutura:
-    - Pondera valores dos vizinhos pelo inverso da distância (vizinhos próximos pesam mais)
-    - Cria interações entre valor, distância e altitude
+Target: coluna n. Features: n1, n1_dist, n1_alt_diff, n1_idw, n2, ... (mesmo esquema da regressão linear).
+Esquema do DF: measurement_time, code, n, n1, n1_dist, n1_alt_diff, n1_idw, n2, ...
 
-Usa arquivos separados de treino (_train.parquet) e teste (_test.parquet).
-
-Os resultados são salvos em CSV e o melhor modelo é salvo para cada variável.
+Arquivos: {base_path}_train.parquet e _test.parquet (ex: data/data_train/temperature/).
+Métricas: mae, rmse, bias, r, r2. Resultados em CSV; melhor modelo salvo por variável.
 
 pipenv run python train/dense/dense.py
 """
@@ -86,121 +84,26 @@ def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 # FUNÇÕES AUXILIARES
 # =============================================================================
 
-def detect_variable_name(df: pd.DataFrame) -> str:
-    """Detecta automaticamente o nome da variável no DataFrame."""
-    exclude_patterns = ['code', 'time']
-    
-    for col in df.columns:
-        if col in exclude_patterns:
-            continue
-        
-        if col.startswith('n') and '_' in col:
-            parts = col.split('_')
-            if parts[0][1:].isdigit():
-                continue
-        
-        if not (col.startswith('n') and col[1:].split('_')[0].isdigit()):
-            return col
-    
-    raise ValueError("Não foi possível detectar a variável principal no DataFrame")
-
-
 def prepare_features(
-    df: pd.DataFrame, 
-    var_name: str,
+    df: pd.DataFrame,
     n_neighbors: int = 20
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
-    Prepara as features para a rede neural COM ESTRUTURA.
-    
-    Usa Inverse Distance Weighting (IDW) para ponderar valores dos vizinhos.
-    
-    Para cada vizinho i, cria features:
-        - valor do vizinho (n{i}_{var})
-        - IDW: valor / (dist + 1e-6)  → vizinhos próximos pesam mais
-        - distância em km
-        - diferença de altitude em km
-    
-    Features agregadas:
-        - IDW total (soma ponderada / soma dos pesos)
-        - Média simples dos vizinhos
-        - Variância dos vizinhos
-    
-    Returns:
-        Tuple com (X, y, feature_names)
+    Prepara features para a rede densa: target = coluna n; por vizinho
+    n1, n1_dist, n1_alt_diff, n1_idw, n2, ... (mesmo esquema da regressão linear).
+    Esquema do DF: measurement_time, code, n, n1, n1_dist, n1_alt_diff, n1_idw, ...
     """
-    features = []
-    feature_names = []
-    
-    # Arrays para cálculos agregados
-    valores = []
-    pesos_idw = []
-    
+    if 'n' not in df.columns:
+        raise ValueError("DataFrame deve ter coluna 'n' (target)")
+    feature_cols = []
     for i in range(1, n_neighbors + 1):
-        col_value = f'n{i}_{var_name}'
-        col_dist = f'n{i}_dist_km'
-        col_alt = f'n{i}_altdiff_km'
-        
-        if col_value not in df.columns:
-            continue
-            
-        val = df[col_value].values
-        dist = df[col_dist].values if col_dist in df.columns else np.ones(len(df))
-        alt = df[col_alt].values if col_alt in df.columns else np.zeros(len(df))
-        
-        # Feature 1: Valor bruto do vizinho
-        features.append(val)
-        feature_names.append(f'n{i}_value')
-        
-        # Feature 2: IDW - valor ponderado pelo inverso da distância
-        # Quanto menor a distância, maior o peso
-        peso_idw = 1.0 / (dist + 1e-6)
-        val_idw = val / (dist + 1e-6)
-        features.append(val_idw)
-        feature_names.append(f'n{i}_idw')
-        
-        # Feature 3: Distância em km
-        features.append(dist)
-        feature_names.append(f'n{i}_dist')
-        
-        # Feature 4: Diferença de altitude em km
-        features.append(alt)
-        feature_names.append(f'n{i}_alt')
-        
-        # Guarda para agregados
-        valores.append(val)
-        pesos_idw.append(peso_idw)
-    
-    # Features agregadas
-    valores = np.array(valores)  # (n_neighbors, n_samples)
-    pesos_idw = np.array(pesos_idw)
-    
-    # IDW total: Σ(valor * peso) / Σ(peso)
-    soma_pesos = np.sum(pesos_idw, axis=0) + 1e-8
-    idw_total = np.sum(valores * pesos_idw, axis=0) / soma_pesos
-    features.append(idw_total)
-    feature_names.append('idw_total')
-    
-    # Média simples dos vizinhos
-    media_simples = np.mean(valores, axis=0)
-    features.append(media_simples)
-    feature_names.append('simple_mean')
-    
-    # Variância dos vizinhos (indica dispersão espacial)
-    variancia = np.var(valores, axis=0)
-    features.append(variancia)
-    feature_names.append('variance')
-    
-    # Diferença entre n1 e média (o quanto o vizinho mais próximo difere)
-    diff_n1_media = valores[0] - media_simples
-    features.append(diff_n1_media)
-    feature_names.append('n1_diff_mean')
-    
-    # Stack features (usa float32 para economizar memória)
-    X = np.column_stack(features).astype(np.float32)
-    y = df[var_name].values.astype(np.float32)
-    
-    return X, y, feature_names
+        for suffix in ('', '_dist', '_alt_diff', '_idw'):
+            col = f'n{i}{suffix}' if suffix else f'n{i}'
+            if col in df.columns:
+                feature_cols.append(col)
+    X = df[feature_cols].values.astype(np.float32)
+    y = df['n'].values.astype(np.float32)
+    return X, y, feature_cols
 
 
 # =============================================================================
@@ -230,7 +133,7 @@ def build_dense_model(
     """
     model = Sequential([
         Input(shape=(input_dim,)),
-        BatchNormalization(),
+
         Dense(128, activation='relu'),
         Dense(128, activation='relu'),
         Dense(64, activation='relu'),
@@ -277,10 +180,10 @@ def evaluate_dense(
         - {base_path}_test.parquet
     
     Args:
-        base_path: Caminho base (ex: 'data_train/temperature/temperature')
+        base_path: Caminho base (ex: 'data/data_train/temperature/temperature')
         output_dir: Diretório de saída para métricas
         models_dir: Diretório para salvar modelos
-        variable_name: Nome da variável (auto-detectado se None)
+        variable_name: Nome da variável para o CSV (extraído do base_path se None)
         n_neighbors: Número de vizinhos a usar (default: 20)
         learning_rate: Taxa de aprendizado (default: 0.001)
         weight_decay: Regularização L2 via AdamW (default: 0.01)
@@ -292,26 +195,16 @@ def evaluate_dense(
     Returns:
         DataFrame com os resultados das métricas
     """
-    # Define paths dos arquivos
     train_path = f"{base_path}_train.parquet"
     test_path = f"{base_path}_test.parquet"
-    
-    # Lê arquivo de treino
-    print(f"Lendo arquivo de treino: {train_path}")
-    df_train = pd.read_parquet(train_path)
-    print(f"  → {len(df_train):,} registros de treino")
-    
-    # Detecta variável
     if variable_name is None:
-        variable_name = detect_variable_name(df_train)
-    print(f"  → Variável detectada: {variable_name}")
-    
-    # Prepara features com estrutura IDW
-    print("\nPreparando features com IDW (Inverse Distance Weighting)...")
-    X_train, y_train, feature_names = prepare_features(df_train, variable_name, n_neighbors)
-    train_size = len(y_train)  # Guarda antes de deletar
-    print(f"  → {train_size:,} amostras de treino")
-    print(f"  → {len(feature_names)} features (valor, IDW, dist, alt por vizinho + agregadas)")
+        variable_name = os.path.basename(base_path.rstrip('/'))
+    print(f"Variável: {variable_name}")
+    print(f"Lendo treino: {train_path}")
+    df_train = pd.read_parquet(train_path)
+    print(f"  → {len(df_train):,} registros")
+    X_train, y_train, feature_names = prepare_features(df_train, n_neighbors)
+    print(f"  → {len(y_train):,} amostras, {len(feature_names)} features")
     
     # Libera memória do DataFrame de treino (já extraímos X_train e y_train)
     del df_train
@@ -385,9 +278,7 @@ def evaluate_dense(
     df_test = pd.read_parquet(test_path)
     print(f"  → {len(df_test):,} registros de teste")
     
-    # Prepara features de teste
-    X_test, y_test, _ = prepare_features(df_test, variable_name, n_neighbors)
-    test_size = len(y_test)  # Guarda antes de deletar df_test
+    X_test, y_test, _ = prepare_features(df_test, n_neighbors)
     del df_test  # Libera memória
     gc.collect()
     
@@ -395,23 +286,10 @@ def evaluate_dense(
     print("Fazendo predições no conjunto de teste...")
     y_pred = model.predict(X_test, batch_size=batch_size, verbose=0).flatten()
     
-    # Calcula métricas
     metrics = calculate_all_metrics(y_test, y_pred)
     metrics['variable'] = variable_name
-    metrics['n_neighbors'] = n_neighbors
-    metrics['n_features'] = len(feature_names)
-    metrics['learning_rate'] = learning_rate
-    metrics['train_size'] = train_size
-    metrics['test_size'] = test_size
-    metrics['epochs_trained'] = len(history.history['loss'])
-    metrics['best_val_loss'] = min(history.history['val_loss'])
-    
-    # Cria DataFrame
     result_df = pd.DataFrame([metrics])
-    
-    # Reordena colunas
-    cols = ['variable', 'n_neighbors', 'n_features', 'train_size', 'test_size',
-            'epochs_trained', 'mae', 'rmse', 'bias', 'r', 'r2']
+    cols = ['variable', 'mae', 'rmse', 'bias', 'r', 'r2']
     result_df = result_df[cols]
     
     # Salva métricas
@@ -444,15 +322,15 @@ def evaluate_dense(
 # EXECUÇÃO
 # =============================================================================
 
-# base_path='data_train/temperature/temperature'
-# base_path='data_train/humidity/humidity'
-# base_path='data_train/radiation/radiation'
-# base_path='data_train/pressure/pressure'
-# base_path='data_train/rainfall/rainfall'
+# base_path='data/data_train/temperature/temperature'
+# base_path='data/data_train/humidity/humidity'
+# base_path='data/data_train/radiation/radiation'
+# base_path='data/data_train/pressure/pressure'
+# base_path='data/data_train/rainfall/rainfall'
 
 if __name__ == '__main__':
     evaluate_dense(
-        base_path='data_train/temperature/temperature',
+        base_path='data/data_train/temperature/temperature',
         output_dir='train/dense/results',
         models_dir='train/dense/models',
         learning_rate=0.001,
