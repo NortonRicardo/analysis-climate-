@@ -233,6 +233,6 @@ def evaluate_neighbors(
 
 if __name__ == '__main__':
     evaluate_neighbors(
-        base_path='data/data_train/pressure/pressure',
+        base_path='data/data_train/humidity/humidity',
         output_dir='train/neighbors/results'
     )
